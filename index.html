@@ -424,15 +424,16 @@
         .catch(function(){ showSync('Офлайн - только на устройстве', false); });
     }
     function normalizeData(list) {
-      const map = {};
-      list.forEach(e => {
-        if (map[e.month]) {
-          FIELDS.forEach(f => { map[e.month][f] = (map[e.month][f] || 0) + (e[f] || 0); });
-        } else {
-          map[e.month] = e;
-        }
+      const seen = new Set();
+      const out = [];
+      list.forEach((e, i) => {
+        if (!e || !e.month) return;
+        if (!e.id) e.id = 'auto' + i;
+        if (seen.has(e.id)) return;
+        seen.add(e.id);
+        out.push(e);
       });
-      return Object.values(map).sort((a,b) => a.month.localeCompare(b.month));
+      return out.sort((a,b) => a.month.localeCompare(b.month));
     }
     function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
     function entryTotal(e) { return FIELDS.reduce((s,f) => s + (e[f]||0), 0); }
@@ -476,9 +477,9 @@
       try {
         const cloud = normalizeData(await cloudFetch());
         const map = {};
-        cloud.forEach(e => { map[e.month] = e; });
+        cloud.forEach(e => { map[e.id] = e; });
         let localAdded = 0;
-        data.forEach(e => { if (!map[e.month]) { map[e.month] = e; localAdded++; } });
+        data.forEach(e => { if (!map[e.id]) { map[e.id] = e; localAdded++; } });
         data = Object.values(map).sort((a,b) => a.month.localeCompare(b.month));
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         if (localAdded > 0) cloudReplace(normalizeData(data)).catch(() => {});
@@ -520,14 +521,9 @@
         alert('Введите хотя бы одну сумму.');
         return;
       }
-      const existing = data.find(e => e.month === month);
-      if (existing) {
-        FIELDS.forEach(f => { existing[f] = (existing[f] || 0) + values[f]; });
-      } else {
-        const entry = { id: genId(), month };
-        FIELDS.forEach(f => { entry[f] = values[f]; });
-        data.push(entry);
-      }
+      const entry = { id: genId(), month };
+      FIELDS.forEach(f => { entry[f] = values[f]; });
+      data.push(entry);
       data.sort((a,b) => a.month.localeCompare(b.month));
       saveData();
       renderAll();
