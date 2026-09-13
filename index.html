@@ -272,7 +272,7 @@
       <div class="form-row" id="form">
         <div class="form-group">
           <label>Месяц</label>
-          <input type="month" id="fMonth" onchange="clearFormFields()">
+          <input type="month" id="fMonth">
         </div>
         <div class="form-group">
           <label>Водоканал (руб)</label>
@@ -509,9 +509,6 @@
         values[f] = parseFloat(document.getElementById(FIELD_IDS[f]).value) || 0;
       });
       return values;
-    }
-    function clearFormFields() {
-      FIELDS.forEach(f => { document.getElementById(FIELD_IDS[f]).value = ''; });
     }
     function addEntry() {
       const month = document.getElementById('fMonth').value;
