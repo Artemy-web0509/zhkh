@@ -259,6 +259,12 @@
       <span id="syncText">Подключение...</span>
     </div>
 
+    <div class="tabs module-switch">
+      <button class="tab-btn active" id="moduleZhkhBtn" onclick="switchModule('zhkh')">ЖКХ</button>
+      <button class="tab-btn" id="moduleClubsBtn" onclick="switchModule('clubs')">Кружки</button>
+    </div>
+
+    <div id="module-zhkh">
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('add')">Добавить</button>
       <button class="tab-btn" onclick="switchTab('current')">Текущий год</button>
@@ -394,6 +400,72 @@
       </div>
       <button class="btn btn-export" onclick="exportAllCSV()">Экспорт в CSV</button>
     </div>
+    </div>
+
+    <div id="module-clubs" style="display:none">
+      <div class="summary" id="summaryClubs"></div>
+      <div class="form-row" id="clubsForm">
+        <div class="form-group">
+          <label>Месяц</label>
+          <input type="month" id="cfMonth" onchange="clubsFieldChanged()">
+        </div>
+        <div class="form-group">
+          <label>Кружок</label>
+          <select id="cfClub" onchange="clubsFieldChanged()">
+            <option value="robodom">Робототехника (Рободом)</option>
+            <option value="football">Футбол</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Сумма (руб)</label>
+          <input type="number" id="cfSum" placeholder="0" min="0" step="0.01">
+        </div>
+        <div class="form-group" style="justify-content:flex-end">
+          <button class="btn btn-add" onclick="addClubEntry()">+ Добавить</button>
+        </div>
+      </div>
+
+      <div class="tabs" id="clubsTabs">
+        <button class="tab-btn active" onclick="switchClubsTab('add')">Последние</button>
+        <button class="tab-btn" onclick="switchClubsTab('current')">Текущий год</button>
+        <button class="tab-btn" onclick="switchClubsTab('all')">Всё</button>
+      </div>
+
+      <div class="tab-content active" id="tab-clubs-add">
+        <div class="summary" id="summaryClubsAdd"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Месяц</th><th>Кружок</th><th>Сумма</th><th></th></tr></thead>
+            <tbody id="tableClubsAdd"></tbody>
+            <tfoot id="footClubsAdd"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-content" id="tab-clubs-current">
+        <div class="summary" id="summaryClubsCurrent"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Месяц</th><th>Кружок</th><th>Сумма</th><th></th></tr></thead>
+            <tbody id="tableClubsCurrent"></tbody>
+            <tfoot id="footClubsCurrent"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-content" id="tab-clubs-all">
+        <div class="summary" id="summaryClubsAll"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Месяц</th><th>Кружок</th><th>Сумма</th><th></th></tr></thead>
+            <tbody id="tableClubsAll"></tbody>
+            <tfoot id="footClubsAll"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <button class="btn btn-export" onclick="exportClubsCSV()">Экспорт в CSV</button>
+    </div>
   </div>
 
   <script>
@@ -410,6 +482,7 @@
     let activeTab = 'add';
     let archiveSelectedMonths = new Set();
     let currentFormMonth = null;
+    let activeModule = 'zhkh';
     const monthDrafts = {};
 
     // --- Data ---
@@ -421,7 +494,7 @@
     function saveData() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       showSync('Сохранение в облако...', false);
-      cloudReplace(normalizeData(data))
+      cloudReplace(payloadData())
         .then(function(){ showSync('В облаке', true); })
         .catch(function(){ showSync('Офлайн - только на устройстве', false); });
     }
@@ -453,6 +526,14 @@
         'Content-Type': 'application/json'
       };
     }
+    function payloadData() {
+      return { zhkh: data, clubs: normalizeClubs(clubData) };
+    }
+    function payloadParse(p) {
+      if (Array.isArray(p)) return { zhkh: p, clubs: [] };
+      if (p && typeof p === 'object') return { zhkh: Array.isArray(p.zhkh) ? p.zhkh : [], clubs: Array.isArray(p.clubs) ? p.clubs : [] };
+      return { zhkh: [], clubs: [] };
+    }
     async function cloudFetch() {
       const r = await fetch(SUPABASE_URL + '/rest/v1/' + CLOUD_TABLE + '?select=payload', {
         method: 'GET',
@@ -461,9 +542,9 @@
       if (!r.ok) throw new Error('db ' + r.status);
       const rows = await r.json();
       for (let i = 0; i < rows.length; i++) {
-        if (Array.isArray(rows[i].payload)) return rows[i].payload;
+        if (rows[i].payload !== undefined && rows[i].payload !== null) return rows[i].payload;
       }
-      return [];
+      return {};
     }
     async function cloudReplace(list) {
       const base = SUPABASE_URL + '/rest/v1/' + CLOUD_TABLE;
@@ -477,16 +558,25 @@
     }
     async function mergeFromCloud() {
       try {
-        const cloud = normalizeData(await cloudFetch());
-        const map = {};
-        cloud.forEach(e => { map[e.id] = e; });
-        let localAdded = 0;
-        data.forEach(e => { if (!map[e.id]) { map[e.id] = e; localAdded++; } });
-        data = Object.values(map).sort((a,b) => a.month.localeCompare(b.month));
+        const cloud = payloadParse(await cloudFetch());
+        const zhkhMap = {};
+        normalizeData(cloud.zhkh).forEach(e => { zhkhMap[e.id] = e; });
+        let zhkhAdded = 0;
+        data.forEach(e => { if (!zhkhMap[e.id]) { zhkhMap[e.id] = e; zhkhAdded++; } });
+        data = Object.values(zhkhMap).sort((a,b) => a.month.localeCompare(b.month));
+
+        const clubsMap = {};
+        normalizeClubs(cloud.clubs).forEach(e => { clubsMap[e.id] = e; });
+        let clubsAdded = 0;
+        clubData.forEach(e => { if (!clubsMap[e.id]) { clubsMap[e.id] = e; clubsAdded++; } });
+        clubData = Object.values(clubsMap).sort((a,b) => (a.month + a.club).localeCompare(b.month + b.club));
+
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        if (localAdded > 0) cloudReplace(normalizeData(data)).catch(() => {});
+        localStorage.setItem(CLUB_KEY, JSON.stringify(clubData));
+        if (zhkhAdded > 0 || clubsAdded > 0) cloudReplace(payloadData()).catch(() => {});
         showSync('В облаке', true);
         renderAll();
+        renderClubs();
       } catch (e) {
         showSync('Офлайн - только на устройстве', false);
       }
@@ -495,8 +585,8 @@
     // --- Tabs ---
     function switchTab(tab) {
       activeTab = tab;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.querySelectorAll('#module-zhkh .tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#module-zhkh .tab-content').forEach(c => c.classList.remove('active'));
       event.target.classList.add('active');
       document.getElementById('tab-' + tab).classList.add('active');
       if (tab === 'current') renderCurrentYear();
@@ -763,23 +853,218 @@
       if (activeTab === 'all') renderAllData();
     }
 
+    // --- Кружки ---
+    const CLUB_NAMES = { robodom: 'Робототехника (Рободом)', football: 'Футбол' };
+    const CLUB_KEY = 'zhkh_clubs';
+    let clubData = [];
+    let activeClubsTab = 'add';
+    let editingClubId = null;
+    let clubsFieldKey = null;
+    const clubDrafts = {};
+
+    function loadClubData() {
+      try { clubData = JSON.parse(localStorage.getItem(CLUB_KEY)) || []; }
+      catch { clubData = []; }
+      clubData = normalizeClubs(clubData);
+    }
+    function saveClubData() {
+      localStorage.setItem(CLUB_KEY, JSON.stringify(clubData));
+      showSync('Сохранение в облако...', false);
+      cloudReplace(payloadData())
+        .then(function(){ showSync('В облаке', true); })
+        .catch(function(){ showSync('Офлайн - только на устройстве', false); });
+    }
+    function normalizeClubs(list) {
+      const seen = new Set();
+      const out = [];
+      list.forEach((e, i) => {
+        if (!e || !e.month || !e.club) return;
+        if (!e.id) e.id = 'cauto' + i;
+        if (seen.has(e.id)) return;
+        seen.add(e.id);
+        out.push(e);
+      });
+      return out.sort((a,b) => (a.month + a.club).localeCompare(b.month + b.club));
+    }
+    function clubName(c) { return CLUB_NAMES[c] || c; }
+    function clubEntrySum(e) { return parseFloat(e.sum) || 0; }
+
+    function switchModule(m) {
+      activeModule = m;
+      document.getElementById('moduleZhkhBtn').classList.toggle('active', m === 'zhkh');
+      document.getElementById('moduleClubsBtn').classList.toggle('active', m === 'clubs');
+      document.getElementById('module-zhkh').style.display = m === 'zhkh' ? 'block' : 'none';
+      document.getElementById('module-clubs').style.display = m === 'clubs' ? 'block' : 'none';
+      if (m === 'zhkh') renderAll();
+      if (m === 'clubs') renderClubs();
+    }
+    function switchClubsTab(tab) {
+      activeClubsTab = tab;
+      document.querySelectorAll('#clubsTabs .tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#module-clubs .tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('tab-clubs-' + tab).classList.add('active');
+      renderClubs();
+    }
+
+    function readClubField() { return document.getElementById('cfSum').value; }
+    function setClubField(v) { document.getElementById('cfSum').value = (v === undefined ? '' : v); }
+    function saveClubDrafts() {
+      try { localStorage.setItem('zhkh_club_drafts', JSON.stringify(clubDrafts)); } catch (e) {}
+    }
+    function clubsFieldChanged() {
+      const m = document.getElementById('cfMonth').value;
+      const c = document.getElementById('cfClub').value;
+      const key = m ? m + '_' + c : null;
+      if (clubsFieldKey && clubsFieldKey !== key) clubDrafts[clubsFieldKey] = readClubField();
+      clubsFieldKey = key;
+      setClubField(key ? (clubDrafts[key] || '') : '');
+      saveClubDrafts();
+    }
+    function rememberClubDraft() {
+      const m = document.getElementById('cfMonth').value;
+      const c = document.getElementById('cfClub').value;
+      if (!m) return;
+      clubsFieldKey = m + '_' + c;
+      clubDrafts[clubsFieldKey] = readClubField();
+      saveClubDrafts();
+    }
+
+    function addClubEntry() {
+      const month = document.getElementById('cfMonth').value;
+      const club = document.getElementById('cfClub').value;
+      const sum = parseFloat(document.getElementById('cfSum').value) || 0;
+      if (!month) { alert('Выберите месяц'); return; }
+      if (sum <= 0) { alert('Введите сумму.'); return; }
+      clubData.push({ id: genId(), month, club, sum });
+      clubData = normalizeClubs(clubData);
+      saveClubData();
+      renderClubs();
+      rememberClubDraft();
+    }
+    function removeClubEntry(id) {
+      if (!confirm('Удалить запись?')) return;
+      clubData = clubData.filter(e => e.id !== id);
+      saveClubData();
+      renderClubs();
+    }
+    function startEditClub(id) { editingClubId = id; renderClubs(); }
+    function cancelEditClub() { editingClubId = null; renderClubs(); }
+    function saveEditClub(id) {
+      const entry = clubData.find(e => e.id === id);
+      if (!entry) return;
+      const row = document.querySelector('#module-clubs tr[data-id="' + id + '"]');
+      const input = row.querySelector('input[data-field="sum"]');
+      if (input) entry.sum = parseFloat(input.value) || 0;
+      editingClubId = null;
+      saveClubData();
+      renderClubs();
+    }
+
+    function makeClubRow(e) {
+      const isEdit = editingClubId === e.id;
+      const label = formatMonth(e.month);
+      const cName = clubName(e.club);
+      const sum = clubEntrySum(e);
+      const actions = isEdit
+        ? `<button class="btn btn-save" onclick="saveEditClub('${e.id}')">Сохр.</button>
+           <button class="btn btn-cancel" onclick="cancelEditClub()">Отм.</button>`
+        : `<button class="btn btn-edit" onclick="startEditClub('${e.id}')">Изм.</button>
+           <button class="btn btn-del" onclick="removeClubEntry('${e.id}')">Удл.</button>`;
+      const sumCell = isEdit
+        ? `<td class="editable"><input type="number" data-field="sum" value="${sum}" min="0" step="0.01"></td>`
+        : `<td>${sum.toFixed(2)}</td>`;
+      return `<tr data-id="${e.id}">
+        <td>${label}</td>
+        <td>${cName}</td>
+        ${sumCell}
+        <td class="actions">${actions}</td>
+      </tr>`;
+    }
+    function makeClubFoot(entries) {
+      if (!entries.length) return '';
+      const total = entries.reduce((s,e) => s + clubEntrySum(e), 0);
+      const per = {};
+      entries.forEach(e => { per[e.club] = (per[e.club] || 0) + clubEntrySum(e); });
+      const cells = Object.keys(per).length
+        ? Object.keys(per).map(c => clubName(c) + ': ' + per[c].toFixed(2)).join(' + ')
+        : '';
+      return `<tr class="total-row">
+        <td colspan="2">ИТОГО (${cells})</td>
+        <td>${total.toFixed(2)}</td>
+        <td></td>
+      </tr>`;
+    }
+    function makeClubSummary(container, entries) {
+      const el = document.getElementById(container);
+      if (!entries.length) { el.innerHTML = ''; return; }
+      const total = entries.reduce((s,e) => s + clubEntrySum(e), 0);
+      const rob = entries.filter(e => e.club === 'robodom').reduce((s,e) => s + clubEntrySum(e), 0);
+      const foot = entries.filter(e => e.club === 'football').reduce((s,e) => s + clubEntrySum(e), 0);
+      el.innerHTML = `
+        <div class="summary-card"><div class="label">Записей</div><div class="value blue">${entries.length}</div></div>
+        <div class="summary-card"><div class="label">Рободом</div><div class="value yellow">${rob.toFixed(2)} ₽</div></div>
+        <div class="summary-card"><div class="label">Футбол</div><div class="value green">${foot.toFixed(2)} ₽</div></div>
+        <div class="summary-card"><div class="label">Всего</div><div class="value green">${total.toFixed(2)} ₽</div></div>
+      `;
+    }
+    function renderClubsList(tbodyId, footId, entries) {
+      const tbody = document.getElementById(tbodyId);
+      const tfoot = document.getElementById(footId);
+      if (!entries.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">Нет записей</td></tr>';
+        tfoot.innerHTML = '';
+      } else {
+        tbody.innerHTML = entries.map(makeClubRow).join('');
+        tfoot.innerHTML = makeClubFoot(entries);
+      }
+    }
+    function renderClubs() {
+      const year = new Date().getFullYear().toString();
+      const yearData = clubData.filter(e => e.month.startsWith(year));
+      renderClubsList('tableClubsAdd', 'footClubsAdd', clubData.slice(-6).reverse());
+      renderClubsList('tableClubsCurrent', 'footClubsCurrent', yearData);
+      renderClubsList('tableClubsAll', 'footClubsAll', clubData);
+      makeClubSummary('summaryClubs', clubData);
+      makeClubSummary('summaryClubsAdd', clubData.slice(-6));
+      makeClubSummary('summaryClubsCurrent', yearData);
+      makeClubSummary('summaryClubsAll', clubData);
+    }
+    function exportClubsCSV() {
+      const all = clubData.slice().sort((a,b) => (a.month + a.club).localeCompare(b.month + b.club));
+      if (!all.length) { alert('Нет данных для экспорта'); return; }
+      let csv = 'Месяц,Кружок,Сумма\n';
+      all.forEach(e => {
+        csv += `${formatMonth(e.month)},${clubName(e.club)},${clubEntrySum(e).toFixed(2)}\n`;
+      });
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'zhkh_clubs.csv';
+      a.click();
+    }
+
     // --- Cross-tab sync on the same device ---
     window.addEventListener('storage', e => {
-      if (e.key === STORAGE_KEY) {
-        loadData();
-        renderAll();
-      }
+      if (e.key === STORAGE_KEY) { loadData(); renderAll(); }
+      if (e.key === CLUB_KEY) { loadClubData(); renderClubs(); }
     });
 
     // --- Init ---
     loadData();
+    loadClubData();
     renderAll();
+    renderClubs();
     mergeFromCloud();
     const now = new Date();
     document.getElementById('fMonth').value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     currentFormMonth = document.getElementById('fMonth').value;
     try { Object.assign(monthDrafts, JSON.parse(localStorage.getItem('zhkh_drafts') || '{}')); } catch (e) {}
     if (monthDrafts[currentFormMonth]) setFormRaw(monthDrafts[currentFormMonth]);
+    document.getElementById('cfMonth').value = currentFormMonth;
+    try { Object.assign(clubDrafts, JSON.parse(localStorage.getItem('zhkh_club_drafts') || '{}')); } catch (e) {}
+    clubsFieldKey = currentFormMonth + '_' + document.getElementById('cfClub').value;
+    if (clubDrafts[clubsFieldKey]) setClubField(clubDrafts[clubsFieldKey]);
   </script>
 </body>
 </html>
